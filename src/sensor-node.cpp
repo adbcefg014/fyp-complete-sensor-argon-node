@@ -33,7 +33,7 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-unsigned long sensorInterval = 30000;
+unsigned long sensorInterval = 60000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 bool notFirstRun = false;
@@ -62,7 +62,7 @@ void setup() {
 	Particle.disconnect();
 	waitUntil(Particle.disconnected);
 	WiFi.off();
-	delay(5s);
+	delay(10s);
 }
 
 // loop() runs over and over again, as quickly as it can execute. Main Program flow goes here!
@@ -136,12 +136,17 @@ void initializeSensors()
 	while (!bh.begin()) delay(500);
 	bh.set_sensor_mode(BH1750::forced_mode_low_res);
 
-	// BME280 PTH Sensor
+	// BME280 PTH Sensor, Recommended weather monitoring settings, 1 sample/min
 	while (!bme.begin()) delay(500);
+	bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1, // temperature
+                    Adafruit_BME280::SAMPLING_X1, // pressure
+                    Adafruit_BME280::SAMPLING_X1, // humidity
+                    Adafruit_BME280::FILTER_OFF   );
 
-	// SCD30 CO2 Sensor
+	// SCD30 CO2 Sensor, 1 sample/min
 	while (!airSensor.begin()) delay(500);
-	airSensor.setMeasurementInterval(25);
+	airSensor.setMeasurementInterval(60);
   	airSensor.setAutoSelfCalibration(true);
 
 	// Particulate sensor PM2.5
