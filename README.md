@@ -8,8 +8,6 @@ Title:	            Study of Wireless Sensor Hardware for Internet of Things Faci
 
 Main Supervisor:	Asst Prof Li King Ho, Holden
 
-A Particle project named sensor-node
-
 ## Welcome to your project!
 
 Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for sensor-node.
