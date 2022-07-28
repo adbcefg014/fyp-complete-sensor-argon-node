@@ -8,6 +8,8 @@ Title:	            Study of Wireless Sensor Hardware for Internet of Things Faci
 
 Main Supervisor:	Asst Prof Li King Ho, Holden
 
+Forked and continued from previous milestone at https://github.com/adbcefg014/fyp-argon-sensors
+
 ## Welcome to your project!
 
 Every new Particle project is composed of 3 important elements that you'll see have been created in your project directory for sensor-node.

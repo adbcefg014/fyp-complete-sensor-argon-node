@@ -33,7 +33,7 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-unsigned long sensorInterval = 60000;
+unsigned long sensingInterval = 60000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 bool notFirstRun = false;
@@ -50,12 +50,14 @@ void setup() {
 	Particle.connect();
 	pinMode(D7,OUTPUT);
 	Wire.begin();
-	sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER);
+	Serial.begin();
+	notFirstRun = false;
 	initializeSensors();
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
 	Particle.setDisconnectOptions(CloudDisconnectOptions().graceful(true).timeout(5s));
+	Particle.process();
 	syncClock();
 
 	// Turn off connectivity
@@ -73,16 +75,11 @@ void loop() {
 	writerJson.beginObject();
 	writerJson.name("deviceID").value(System.deviceID());
 
-	// Sleep until next sensor reading timing
-	if (notFirstRun) {
-		sleepConfig.duration(sensorInterval + timeNow - Time.now());
-		System.sleep(sleepConfig);
-	}
-
 	for (int collateCount = 0; collateCount < 3; collateCount++){
-		// Sleep between sensor readings
-		if (collateCount != 0) {
-			sleepConfig.duration(sensorInterval + timeNow - Time.now());
+		// Sleep until next sensor reading timing
+		if (notFirstRun) {
+			sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
+						.duration(sensingInterval + timeNow - Time.now());
 			System.sleep(sleepConfig);
 		}
 
@@ -92,6 +89,7 @@ void loop() {
 		writerJson.name(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL)).beginObject();
 		writerJson = getSensorReadings(writerJson);
 		writerJson.endObject();
+		notFirstRun = true;
 		digitalWrite(D7,LOW);
 	}
 
@@ -116,6 +114,7 @@ void loop() {
 	Particle.publish("sensor-readings", dataJson);
 
 	// Sync device clock daily
+	Particle.process();
   	syncClock();
 
 	// Shut down connectivity
@@ -123,7 +122,6 @@ void loop() {
 	waitUntil(Particle.disconnected);
 	WiFi.off();
 	free(dataJson);
-	notFirstRun = true;
 	digitalWrite(D7,LOW);
 	
 }
@@ -133,11 +131,17 @@ void loop() {
 void initializeSensors()
 {
 	// BH1750 Lux Sensor
-	while (!bh.begin()) delay(500);
+	while (!bh.begin()) {
+		delay(500);
+		Serial.println("Trying to connect BH1750 Lux Sensor");
+	}
 	bh.set_sensor_mode(BH1750::forced_mode_low_res);
 
 	// BME280 PTH Sensor, Recommended weather monitoring settings, 1 sample/min
-	while (!bme.begin()) delay(500);
+	while (!bme.begin()) {
+		delay(500);
+		Serial.println("Trying to connect BME280 PTH Sensor");
+	}
 	bme.setSampling(Adafruit_BME280::MODE_FORCED,
                     Adafruit_BME280::SAMPLING_X1, // temperature
                     Adafruit_BME280::SAMPLING_X1, // pressure
@@ -145,7 +149,10 @@ void initializeSensors()
                     Adafruit_BME280::FILTER_OFF   );
 
 	// SCD30 CO2 Sensor, 1 sample/min
-	while (!airSensor.begin()) delay(500);
+	while (!airSensor.begin()) {
+		delay(500);
+		Serial.println("Trying to connect SCD30 CO2 Sensor");
+	}
 	airSensor.setMeasurementInterval(60);
   	airSensor.setAutoSelfCalibration(true);
 
@@ -154,6 +161,7 @@ void initializeSensors()
 
 	// Zio Qwiic Loudness Sensor Master
 	qwiicTestForConnectivity();
+	Serial.println("Zio Qwiic Loudness Sensor Master Awake");
 
 	// VEML6070 UV Level Sensor
 	uv.begin(VEML6070_1_T);
@@ -251,7 +259,10 @@ void qwiicTestForConnectivity()
 {
 	Wire.beginTransmission(qwiicAddress);
 	//check here for an ACK from the slave, if no ACK don't allow change?
-	if (Wire.endTransmission() != 0) while (1);
+	if (Wire.endTransmission() != 0) {
+		Serial.println("Check connections. No slave attached.");
+		while (1);
+	}
 	return;
 }
 
