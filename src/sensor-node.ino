@@ -29,6 +29,7 @@ unsigned long sensingInterval = 60000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 bool notFirstRun = false;
+int readingsToCollate = 3;
 
 void initializeSensors();
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerJson);
@@ -52,22 +53,23 @@ void setup() {
 	Particle.process();
 	syncClock();
 
+	// Wait for background tasks to finish, and SCD30 to start up
+	delay(60s);
+
 	// Turn off connectivity
 	Particle.disconnect();
 	waitUntil(Particle.disconnected);
 	WiFi.off();
-	delay(10s);
 }
 
 // loop() runs over and over again, as quickly as it can execute. Main Program flow goes here!
 void loop() {
 	// Start of JSON string
-	char *dataJson = (char *) malloc(1100);
-	JSONBufferWriter writerJson(dataJson, 1099);
+	char *dataJson = (char *) malloc(1050);
+	JSONBufferWriter writerJson(dataJson, 1049);
 	writerJson.beginObject();
-	writerJson.name("deviceID").value(System.deviceID());
 
-	for (int collateCount = 0; collateCount < 3; collateCount++){
+	for (int collateCount = 0; collateCount < readingsToCollate; collateCount++){
 		// Sleep until next sensor reading timing
 		if (notFirstRun) {
 			sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
@@ -77,9 +79,11 @@ void loop() {
 
 		// Collate readings into 1 JSON string
 		digitalWrite(D7,HIGH);
-		timeNow = Time.now();
-		writerJson.name(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL)).beginObject();
-		writerJson = getSensorReadings(writerJson);
+		String readingName = String::format("r%i", collateCount + 1);
+		writerJson.name(readingName).beginObject();
+			timeNow = Time.now();
+			writerJson.name("TS").value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
+			writerJson = getSensorReadings(writerJson);
 		writerJson.endObject();
 		notFirstRun = true;
 		digitalWrite(D7,LOW);
@@ -145,7 +149,7 @@ void initializeSensors()
 		delay(500);
 		Serial.println("Trying to connect SCD30 CO2 Sensor");
 	}
-	airSensor.setMeasurementInterval(60);
+	airSensor.setMeasurementInterval(55);
   	airSensor.setAutoSelfCalibration(true);
 
 	// Particulate sensor PM2.5
@@ -164,63 +168,47 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerJson)
 	/*
 	Planned JSON Structure:
 	{
-		"deviceID": xxxxxxx
-		"DateTime1": 
+		"read1": 
 		{
-			"Sensor1":
-			{
-				"Measurement1": Value1
-				"Measurement2": Value2
-			}
+			"Timestamp1": "DateTime"
+			"Measurement1": Value1
+			"Measurement2": Value2
 		}
 	}
 	*/
 
 	// LUX Sensor (BH1750)
 	bh.make_forced_measurement();
-	writerJson.name("BH1750").beginObject();
 	writerJson.name("lux").value(bh.get_light_level());
-	writerJson.endObject();
 
 	// CO2 Sensor (SCD30)
-	if (airSensor.dataAvailable()) delay(500);
 	if (airSensor.dataAvailable()) {
-		writerJson.name("SCD30").beginObject();
 		writerJson.name("CO2-ppm").value(airSensor.getCO2());
-		writerJson.name("TempC").value(airSensor.getTemperature());
-		writerJson.name("RH%").value(airSensor.getHumidity());
-		writerJson.endObject();
+		writerJson.name("RH1%").value(airSensor.getHumidity());
+		writerJson.name("Temp1C").value(airSensor.getTemperature());
 	}
 	
 	// Particulate Sensor (PMSA003I)
 	PM25_AQI_Data data;
-	writerJson.name("PMSA003I").beginObject();
 	writerJson.name("StdPM1.0").value(data.pm10_standard);
 	writerJson.name("StdPM2.5").value(data.pm25_standard);
 	writerJson.name("StdPM10").value(data.pm100_standard);
 	writerJson.name("EnvPM1.0").value(data.pm10_env);
 	writerJson.name("EnvPM2.5").value(data.pm25_env);
 	writerJson.name("EnvPM10").value(data.pm100_env);
-	writerJson.endObject();
 
 	// Peak Sound Sensor (SPARKFUN SEN-15892)
 	qwiicGetValue();
-	writerJson.name("qwiic").beginObject();
 	writerJson.name("ADC").value(ADC_VALUE);
 	writerJson.name("dB").value(dBnumber);
-	writerJson.endObject();
 
 	// UV Sensor (VEML 6070)
-	writerJson.name("VEML6070").beginObject();
 	writerJson.name("UV").value(uv.readUV());
-	writerJson.endObject();
 
 	// Pressure, Temperature, Humidity Sensor (BME280)
-	writerJson.name("BME280").beginObject();
 	writerJson.name("P-mbar").value(bme.readPressure()/100.0F);
-	writerJson.name("RH%").value(bme.readHumidity());
-	writerJson.name("TempC").value(bme.readTemperature());
-	writerJson.endObject();
+	writerJson.name("RH2%").value(bme.readHumidity());
+	writerJson.name("Temp2C").value(bme.readTemperature());
 
 	return writerJson;
 }
