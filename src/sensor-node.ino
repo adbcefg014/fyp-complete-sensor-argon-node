@@ -56,6 +56,7 @@ void setup() {
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
 	Particle.setDisconnectOptions(CloudDisconnectOptions().graceful(true).timeout(5s));
+	Particle.publishVitals();
 	Particle.process();
 	syncClock();
 
@@ -116,6 +117,7 @@ void loop() {
 	Particle.publish("sensor-readings", dataJson);
 
 	// Sync device clock daily
+	Particle.publishVitals();
 	Particle.process();
   	syncClock();
 
