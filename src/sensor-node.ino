@@ -33,7 +33,7 @@ unsigned long sensingInterval = 60000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 bool waitedForSPS30 = false;
-int readingsToCollate = 3;
+int readingsToCollate = 1;
 
 void initializeSensors();
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
@@ -216,7 +216,7 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 	// CO2 Sensor (SCD30)
 	waitUntil(airSensor.dataAvailable);
 	if (airSensor.dataAvailable()) {
-		writerData.name("CO2-ppm").value(airSensor.getCO2());
+		writerData.value(airSensor.getCO2());
 	}
 
 	// Particulate Sensor (SPS30)
