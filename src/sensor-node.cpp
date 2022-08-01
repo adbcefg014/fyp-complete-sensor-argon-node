@@ -11,8 +11,8 @@
 #include <BH1750.h>	
 #include <Adafruit_BME280.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
-#include <Adafruit_PM25AQI.h>
 #include <Adafruit_VEML6070.h>
+#include <sps30.h>
 
 void setup();
 void loop();
@@ -25,7 +25,11 @@ BH1750 bh;
 #define BME_ADDRESS 0x77
 Adafruit_BME280 bme;
 SCD30 airSensor;
-Adafruit_PM25AQI aqi = Adafruit_PM25AQI();
+#define SP30_COMMS I2C_COMMS
+#define TX_PIN 0
+#define RX_PIN 0
+#define DEBUG 0
+SPS30 sps30;
 Adafruit_VEML6070 uv = Adafruit_VEML6070();
 #define COMMAND_GET_VALUE 0x05
 #define COMMAND_NOTHING_NEW 0x99
@@ -40,9 +44,11 @@ bool notFirstRun = false;
 int readingsToCollate = 3;
 
 void initializeSensors();
-JSONBufferWriter getSensorReadings(JSONBufferWriter writerJson);
+JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
 void qwiicTestForConnectivity();
 void qwiicGetValue();
+JSONBufferWriter readSPS30(JSONBufferWriter writerData);
+void ErrtoMess(char *mess, uint8_t r);
 void goSleep();
 void syncClock();
 
@@ -74,8 +80,8 @@ void setup() {
 void loop() {
 	// Start of JSON string
 	char *dataJson = (char *) malloc(1050);
-	JSONBufferWriter writerJson(dataJson, 1049);
-	writerJson.beginObject();
+	JSONBufferWriter writerData(dataJson, 1049);
+	writerData.beginObject();
 
 	for (int collateCount = 0; collateCount < readingsToCollate; collateCount++){
 		// Sleep until next sensor reading timing
@@ -88,18 +94,18 @@ void loop() {
 		// Collate readings into 1 JSON string
 		digitalWrite(D7,HIGH);
 		String readingName = String::format("r%i", collateCount + 1);
-		writerJson.name(readingName).beginObject();
+		writerData.name(readingName).beginObject();
 			timeNow = Time.now();
-			writerJson.name("TS").value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
-			writerJson = getSensorReadings(writerJson);
-		writerJson.endObject();
+			writerData.name("TS").value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
+			writerData = getSensorReadings(writerData);
+		writerData.endObject();
 		notFirstRun = true;
 		digitalWrite(D7,LOW);
 	}
 
 	// End of JSON string
-	writerJson.endObject();
-	writerJson.buffer()[std::min(writerJson.bufferSize(), writerJson.dataSize())] = 0;
+	writerData.endObject();
+	writerData.buffer()[std::min(writerData.bufferSize(), writerData.dataSize())] = 0;
 
 	// Wake up connectivity
 	digitalWrite(D7,HIGH);
@@ -110,7 +116,7 @@ void loop() {
 
 	// Publish collated JSON string
 	Serial.println("Collated:");
-	Serial.println(writerJson.dataSize());
+	Serial.println(writerData.dataSize());
 	Serial.println(dataJson);
 	Serial.println("");
 	if (!Particle.connected()) Particle.connect();
@@ -160,8 +166,13 @@ void initializeSensors()
 	airSensor.setMeasurementInterval(55);
   	airSensor.setAutoSelfCalibration(true);
 
-	// Particulate sensor PM2.5
-	aqi.begin_I2C();	
+	// Particulate sensor SPS30
+	sps30.EnableDebugging(DEBUG);
+	while (!sps30.begin(SP30_COMMS)) {
+		delay(500);
+		Serial.println("Trying to connect Particulate SPS30 Sensor");
+	}
+	sps30.reset();
 
 	// Zio Qwiic Loudness Sensor Master
 	qwiicTestForConnectivity();
@@ -171,10 +182,10 @@ void initializeSensors()
 	uv.begin(VEML6070_1_T);
 }
 
-JSONBufferWriter getSensorReadings(JSONBufferWriter writerJson)
+JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 {
 	/*
-	Planned JSON Structure:
+	Planned Data Structure:
 	{
 		"read1": 
 		{
@@ -187,38 +198,33 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerJson)
 
 	// LUX Sensor (BH1750)
 	bh.make_forced_measurement();
-	writerJson.name("lux").value(bh.get_light_level());
+	writerData.name("lux").value(bh.get_light_level());
 
 	// CO2 Sensor (SCD30)
 	if (airSensor.dataAvailable()) {
-		writerJson.name("CO2-ppm").value(airSensor.getCO2());
-		writerJson.name("RH1%").value(airSensor.getHumidity());
-		writerJson.name("Temp1C").value(airSensor.getTemperature());
+		writerData.name("CO2-ppm").value(airSensor.getCO2());
+		writerData.name("RH1%").value(airSensor.getHumidity());
+		writerData.name("Temp1C").value(airSensor.getTemperature());
 	}
-	
-	// Particulate Sensor (PMSA003I)
-	PM25_AQI_Data data;
-	writerJson.name("StdPM1.0").value(data.pm10_standard);
-	writerJson.name("StdPM2.5").value(data.pm25_standard);
-	writerJson.name("StdPM10").value(data.pm100_standard);
-	writerJson.name("EnvPM1.0").value(data.pm10_env);
-	writerJson.name("EnvPM2.5").value(data.pm25_env);
-	writerJson.name("EnvPM10").value(data.pm100_env);
+
+	// Particulate Sensor (SPS30)
+	sps30.start();
+	writerData = readSPS30(writerData);
 
 	// Peak Sound Sensor (SPARKFUN SEN-15892)
 	qwiicGetValue();
-	writerJson.name("ADC").value(ADC_VALUE);
-	writerJson.name("dB").value(dBnumber);
+	writerData.name("ADC").value(ADC_VALUE);
+	writerData.name("dB").value(dBnumber);
 
 	// UV Sensor (VEML 6070)
-	writerJson.name("UV").value(uv.readUV());
+	writerData.name("UV").value(uv.readUV());
 
 	// Pressure, Temperature, Humidity Sensor (BME280)
-	writerJson.name("P-mbar").value(bme.readPressure()/100.0F);
-	writerJson.name("RH2%").value(bme.readHumidity());
-	writerJson.name("Temp2C").value(bme.readTemperature());
+	writerData.name("P-mbar").value(bme.readPressure()/100.0F);
+	writerData.name("RH2%").value(bme.readHumidity());
+	writerData.name("Temp2C").value(bme.readTemperature());
 
-	return writerJson;
+	return writerData;
 }
 
 
@@ -252,6 +258,50 @@ void qwiicTestForConnectivity()
 		while (1);
 	}
 	return;
+}
+
+JSONBufferWriter readSPS30(JSONBufferWriter writerData) {
+	uint8_t ret, error_cnt = 0;
+	struct sps_values val;
+
+	// loop to get data
+	do {
+
+	ret = sps30.GetValues(&val);
+
+	// data might not have been ready
+	if (ret == SPS30_ERR_DATALENGTH){
+
+		if (error_cnt++ > 3) {
+			ErrtoMess((char *) "Error during reading values: ",ret);
+			return writerData;
+		}
+		delay(1000);
+	}
+
+	// if other error
+	else if(ret != SPS30_ERR_OK) {
+		ErrtoMess((char *) "Error during reading values: ",ret);
+		return writerData;
+	}
+
+	} while (ret != SPS30_ERR_OK);
+
+	writerData.name("PM1").value(val.MassPM1);
+	writerData.name("PM2.5").value(val.MassPM2);
+	writerData.name("PM4").value(val.MassPM4);
+	writerData.name("PM10").value(val.MassPM10);
+	return writerData;
+}
+
+void ErrtoMess(char *mess, uint8_t r)
+{
+  char buf[80];
+
+  Serial.print(mess);
+
+  sps30.GetErrDescription(r, buf, 80);
+  Serial.println(buf);
 }
 
 void syncClock()
