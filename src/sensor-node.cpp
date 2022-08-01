@@ -40,7 +40,7 @@ float dBnumber = 0.0;
 unsigned long sensingInterval = 60000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-bool notFirstRun = false;
+bool waitedForSPS30 = false;
 int readingsToCollate = 3;
 
 void initializeSensors();
@@ -48,7 +48,8 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
 void qwiicTestForConnectivity();
 void qwiicGetValue();
 JSONBufferWriter readSPS30(JSONBufferWriter writerData);
-void ErrtoMess(char *mess, uint8_t r);
+void finishWaitForSPS30();
+Timer delayForSPS30 (30000, finishWaitForSPS30);
 void goSleep();
 void syncClock();
 
@@ -58,12 +59,12 @@ void setup() {
 	pinMode(D7,OUTPUT);
 	Wire.begin();
 	Serial.begin();
-	notFirstRun = false;
 	initializeSensors();
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
 	Particle.setDisconnectOptions(CloudDisconnectOptions().graceful(true).timeout(5s));
+	Particle.publishVitals();
 	Particle.process();
 	syncClock();
 
@@ -74,56 +75,66 @@ void setup() {
 	Particle.disconnect();
 	waitUntil(Particle.disconnected);
 	WiFi.off();
+
+	// Start first sensor reading timer now
+	timeNow = Time.now();
 }
 
 // loop() runs over and over again, as quickly as it can execute. Main Program flow goes here!
 void loop() {
-	// Start of JSON string
-	char *dataJson = (char *) malloc(1050);
-	JSONBufferWriter writerData(dataJson, 1049);
-	writerData.beginObject();
+	// Start of sensor data string
+	char *dataString = (char *) malloc(1050);
+	JSONBufferWriter writerData(dataString, 1049);
+	writerData.beginArray();
+	writerData.value(System.deviceID());
 
+	// Collate sensor readings sets into 1 string
 	for (int collateCount = 0; collateCount < readingsToCollate; collateCount++){
+
 		// Sleep until next sensor reading timing
-		if (notFirstRun) {
-			sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
-						.duration(sensingInterval + timeNow - Time.now());
-			System.sleep(sleepConfig);
+		sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
+					.duration(sensingInterval + timeNow - Time.now());
+		System.sleep(sleepConfig);
+
+		// Start round of reading sensor data
+		digitalWrite(D7,HIGH);
+		sps30.wakeup();
+		sps30.start();
+		delayForSPS30.start();
+		bh.make_forced_measurement();
+
+		// Preparation for publishing in last loop, wake up various stuff
+		if (collateCount == (readingsToCollate - 1)) {
+			Serial.begin();
+			WiFi.on();
+			Particle.connect();
 		}
 
 		// Collate readings into 1 JSON string
-		digitalWrite(D7,HIGH);
 		String readingName = String::format("r%i", collateCount + 1);
-		writerData.name(readingName).beginObject();
+		writerData.beginArray();
 			timeNow = Time.now();
-			writerData.name("TS").value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
+			writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
 			writerData = getSensorReadings(writerData);
-		writerData.endObject();
-		notFirstRun = true;
+		writerData.endArray();
 		digitalWrite(D7,LOW);
 	}
 
-	// End of JSON string
-	writerData.endObject();
+	// End of sensor data string
+	writerData.endArray();
 	writerData.buffer()[std::min(writerData.bufferSize(), writerData.dataSize())] = 0;
+	
 
-	// Wake up connectivity
-	digitalWrite(D7,HIGH);
-	Serial.begin();
-	WiFi.on();
-	Particle.connect();
+	// Publish collated sensor data string
 	waitUntil(Particle.connected);
-
-	// Publish collated JSON string
 	Serial.println("Collated:");
 	Serial.println(writerData.dataSize());
-	Serial.println(dataJson);
+	Serial.println(dataString);
 	Serial.println("");
-	if (!Particle.connected()) Particle.connect();
-	waitUntil(Particle.connected);
-	Particle.publish("sensor-readings", dataJson);
+	Particle.publish("sensor-readings", dataString);
 
 	// Sync device clock daily
+	Particle.publishVitals();
 	Particle.process();
   	syncClock();
 
@@ -131,7 +142,7 @@ void loop() {
 	Particle.disconnect();
 	waitUntil(Particle.disconnected);
 	WiFi.off();
-	free(dataJson);
+	free(dataString);
 	digitalWrite(D7,LOW);
 	
 }
@@ -185,44 +196,41 @@ void initializeSensors()
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 {
 	/*
-	Planned Data Structure:
-	{
-		"read1": 
-		{
-			"Timestamp1": "DateTime"
-			"Measurement1": Value1
-			"Measurement2": Value2
-		}
-	}
+	* Planned Data Structure:
+	* 
+	* [
+	*	"deviceID",
+	* 	["timestamp1", lux, dB, UV, Pressure, Temp, Humidity, CO2, PM1.0, PM2.5, PM4.0, PM10],	//reading set 1
+	* 	["timestamp2", lux, dB, UV, Pressure, Temp, Humidity, CO2, PM1.0, PM2.5, PM4.0, PM10],	//reading set 2
+	* ]
+	*
 	*/
 
 	// LUX Sensor (BH1750)
-	bh.make_forced_measurement();
-	writerData.name("lux").value(bh.get_light_level());
-
-	// CO2 Sensor (SCD30)
-	if (airSensor.dataAvailable()) {
-		writerData.name("CO2-ppm").value(airSensor.getCO2());
-		writerData.name("RH1%").value(airSensor.getHumidity());
-		writerData.name("Temp1C").value(airSensor.getTemperature());
-	}
-
-	// Particulate Sensor (SPS30)
-	sps30.start();
-	writerData = readSPS30(writerData);
+	writerData.value(bh.get_light_level());
 
 	// Peak Sound Sensor (SPARKFUN SEN-15892)
 	qwiicGetValue();
-	writerData.name("ADC").value(ADC_VALUE);
-	writerData.name("dB").value(dBnumber);
+	writerData.value(dBnumber);
 
 	// UV Sensor (VEML 6070)
-	writerData.name("UV").value(uv.readUV());
+	writerData.value(uv.readUV());
 
 	// Pressure, Temperature, Humidity Sensor (BME280)
-	writerData.name("P-mbar").value(bme.readPressure()/100.0F);
-	writerData.name("RH2%").value(bme.readHumidity());
-	writerData.name("Temp2C").value(bme.readTemperature());
+	writerData.value(bme.readPressure()/100.0F);
+	writerData.value(bme.readTemperature());
+	writerData.value(bme.readHumidity());
+
+	// CO2 Sensor (SCD30)
+	waitUntil(airSensor.dataAvailable);
+	if (airSensor.dataAvailable()) {
+		writerData.name("CO2-ppm").value(airSensor.getCO2());
+	}
+
+	// Particulate Sensor (SPS30)
+	while (!waitedForSPS30) delay(1s);
+	writerData = readSPS30(writerData);
+	sps30.sleep();
 
 	return writerData;
 }
@@ -261,47 +269,25 @@ void qwiicTestForConnectivity()
 }
 
 JSONBufferWriter readSPS30(JSONBufferWriter writerData) {
-	uint8_t ret, error_cnt = 0;
+	uint8_t ret;
 	struct sps_values val;
 
 	// loop to get data
 	do {
-
-	ret = sps30.GetValues(&val);
-
-	// data might not have been ready
-	if (ret == SPS30_ERR_DATALENGTH){
-
-		if (error_cnt++ > 3) {
-			ErrtoMess((char *) "Error during reading values: ",ret);
-			return writerData;
-		}
-		delay(1000);
-	}
-
-	// if other error
-	else if(ret != SPS30_ERR_OK) {
-		ErrtoMess((char *) "Error during reading values: ",ret);
-		return writerData;
-	}
-
+		ret = sps30.GetValues(&val);
 	} while (ret != SPS30_ERR_OK);
+	
 
-	writerData.name("PM1").value(val.MassPM1);
-	writerData.name("PM2.5").value(val.MassPM2);
-	writerData.name("PM4").value(val.MassPM4);
-	writerData.name("PM10").value(val.MassPM10);
+	writerData.value(val.MassPM1);
+	writerData.value(val.MassPM2);
+	writerData.value(val.MassPM4);
+	writerData.value(val.MassPM10);
 	return writerData;
 }
 
-void ErrtoMess(char *mess, uint8_t r)
-{
-  char buf[80];
-
-  Serial.print(mess);
-
-  sps30.GetErrDescription(r, buf, 80);
-  Serial.println(buf);
+void finishWaitForSPS30() {
+	waitedForSPS30 = true;
+	return;
 }
 
 void syncClock()
