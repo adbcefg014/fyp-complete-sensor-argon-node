@@ -200,8 +200,11 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 	}
 
 	// Particulate Sensor (SPS30)
+	sps30.wakeup();
 	sps30.start();
+	delay(30s);
 	writerData = readSPS30(writerData);
+	sps30.sleep();
 
 	// Peak Sound Sensor (SPARKFUN SEN-15892)
 	qwiicGetValue();
