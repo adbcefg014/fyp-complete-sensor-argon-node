@@ -12,7 +12,7 @@
 #include <Adafruit_BME280.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include <Adafruit_VEML6070.h>
-#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 commented out
+#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 edited
 #include <math.h>
 
 void setup();
@@ -42,9 +42,7 @@ float dBnumber = 0.0;
 unsigned long sensingInterval = 120000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-#define READINGS_TO_COLLATE 1
-int sensorPower1 = A0;
-int sensorPower2 = A1;
+#define READINGS_TO_COLLATE 2
 int sensorErrorCount = 0;
 
 void initializeSensors();
@@ -59,13 +57,6 @@ void checkErrorReset();
 // setup() runs once, when the device is first turned on.
 void setup() {
 	pinMode(D7,OUTPUT);
-	pinMode(sensorPower1, OUTPUT);
-	pinMode(sensorPower2, OUTPUT);
-	pinSetDriveStrength(sensorPower1, DriveStrength::HIGH);
-	pinSetDriveStrength(sensorPower2, DriveStrength::HIGH);
-	delay(10s);
-	digitalWrite(sensorPower1, HIGH);
-	digitalWrite(sensorPower2, HIGH);
 	Particle.connect();
 	Wire.begin();
 	Serial.begin();
@@ -73,7 +64,7 @@ void setup() {
 	// Wait for background tasks and senseor initialization to finish
 	sensorErrorCount = 0;
 	initializeSensors();
-	delay(20s);
+	delay(10s);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -87,8 +78,6 @@ void setup() {
 	waitUntil(Particle.disconnected);
 	WiFi.off();
 	sps30.sleep();
-	digitalWrite(sensorPower1, LOW);
-	digitalWrite(sensorPower2, LOW);
 
 	// Start first sensor reading timer now
 	timeNow = Time.now();
@@ -111,8 +100,6 @@ void loop() {
 
 		// Start round of reading sensor data
 		digitalWrite(D7,HIGH);
-		digitalWrite(sensorPower1, HIGH);
-		digitalWrite(sensorPower2, HIGH);
 		sps30.wakeup();
 		bme.begin();
 		bh.begin();
@@ -131,17 +118,15 @@ void loop() {
 
 		// Collate readings into 1 JSON string
 		writerData.beginArray();
-			timeNow = Time.now();
-			writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
-			writerData = getSensorReadings(writerData);
+		timeNow = Time.now();
+		writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
+		writerData = getSensorReadings(writerData);
 		writerData.endArray();
 
 		// End sensor reading
 		sps30.stop();
 		delay(500);
 		sps30.sleep();
-		digitalWrite(sensorPower1, LOW);
-		digitalWrite(sensorPower2, LOW);
 		digitalWrite(D7,LOW);
 	}
 
@@ -158,7 +143,7 @@ void loop() {
 	Serial.println(writerData.dataSize());
 	Serial.println(dataString);
 	Serial.println("");
-	// Particle.publish("sensor-readings", dataString);
+	Particle.publish("sensor-readings", dataString);
 
 	// Sync device clock daily
 	Particle.publishVitals();

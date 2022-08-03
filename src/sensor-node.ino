@@ -7,7 +7,7 @@
 #include <Adafruit_BME280.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include <Adafruit_VEML6070.h>
-#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 commented out
+#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 edited
 #include <math.h>
 
 SYSTEM_MODE(SEMI_AUTOMATIC);
@@ -34,7 +34,7 @@ float dBnumber = 0.0;
 unsigned long sensingInterval = 120000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-#define READINGS_TO_COLLATE 1
+#define READINGS_TO_COLLATE 2
 int sensorErrorCount = 0;
 
 void initializeSensors();
@@ -56,7 +56,7 @@ void setup() {
 	// Wait for background tasks and senseor initialization to finish
 	sensorErrorCount = 0;
 	initializeSensors();
-	delay(20s);
+	delay(10s);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -110,9 +110,9 @@ void loop() {
 
 		// Collate readings into 1 JSON string
 		writerData.beginArray();
-			timeNow = Time.now();
-			writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
-			writerData = getSensorReadings(writerData);
+		timeNow = Time.now();
+		writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
+		writerData = getSensorReadings(writerData);
 		writerData.endArray();
 
 		// End sensor reading
@@ -135,7 +135,7 @@ void loop() {
 	Serial.println(writerData.dataSize());
 	Serial.println(dataString);
 	Serial.println("");
-	// Particle.publish("sensor-readings", dataString);
+	Particle.publish("sensor-readings", dataString);
 
 	// Sync device clock daily
 	Particle.publishVitals();
