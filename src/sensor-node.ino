@@ -35,8 +35,6 @@ unsigned long sensingInterval = 120000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 #define READINGS_TO_COLLATE 1
-int sensorPower1 = A0;
-int sensorPower2 = A1;
 int sensorErrorCount = 0;
 
 void initializeSensors();
@@ -51,13 +49,6 @@ void checkErrorReset();
 // setup() runs once, when the device is first turned on.
 void setup() {
 	pinMode(D7,OUTPUT);
-	pinMode(sensorPower1, OUTPUT);
-	pinMode(sensorPower2, OUTPUT);
-	pinSetDriveStrength(sensorPower1, DriveStrength::HIGH);
-	pinSetDriveStrength(sensorPower2, DriveStrength::HIGH);
-	delay(10s);
-	digitalWrite(sensorPower1, HIGH);
-	digitalWrite(sensorPower2, HIGH);
 	Particle.connect();
 	Wire.begin();
 	Serial.begin();
@@ -79,8 +70,6 @@ void setup() {
 	waitUntil(Particle.disconnected);
 	WiFi.off();
 	sps30.sleep();
-	digitalWrite(sensorPower1, LOW);
-	digitalWrite(sensorPower2, LOW);
 
 	// Start first sensor reading timer now
 	timeNow = Time.now();
@@ -103,8 +92,6 @@ void loop() {
 
 		// Start round of reading sensor data
 		digitalWrite(D7,HIGH);
-		digitalWrite(sensorPower1, HIGH);
-		digitalWrite(sensorPower2, HIGH);
 		sps30.wakeup();
 		bme.begin();
 		bh.begin();
@@ -132,8 +119,6 @@ void loop() {
 		sps30.stop();
 		delay(500);
 		sps30.sleep();
-		digitalWrite(sensorPower1, LOW);
-		digitalWrite(sensorPower2, LOW);
 		digitalWrite(D7,LOW);
 	}
 
