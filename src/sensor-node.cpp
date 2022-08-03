@@ -39,10 +39,11 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-unsigned long sensingInterval = 120000;
+#define INTERVAL_COMPENSATION 30000
+#define SENSING_INTERVAL (120000 - INTERVAL_COMPENSATION)
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-#define READINGS_TO_COLLATE 2
+#define READINGS_TO_COLLATE 5
 int sensorErrorCount = 0;
 
 void initializeSensors();
@@ -95,7 +96,7 @@ void loop() {
 
 		// Sleep until next sensor reading timing
 		sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
-					.duration(sensingInterval + timeNow - Time.now());
+					.duration(SENSING_INTERVAL + timeNow - Time.now());
 		System.sleep(sleepConfig);
 
 		// Start round of reading sensor data
