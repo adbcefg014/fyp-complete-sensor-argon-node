@@ -12,11 +12,12 @@
 #include <Adafruit_BME280.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include <Adafruit_VEML6070.h>
-#include <sps30.h>
+#include <sps30.h>	// https://github.com/paulvha/sps30 , line 190 commented out
+#include <math.h>
 
 void setup();
 void loop();
-#line 12 "d:/JSN/Desktop/repos/c177-iot/sensor-node/src/sensor-node.ino"
+#line 13 "d:/JSN/Desktop/repos/c177-iot/sensor-node/src/sensor-node.ino"
 SYSTEM_MODE(SEMI_AUTOMATIC);
 SYSTEM_THREAD(ENABLED);
 
@@ -26,6 +27,7 @@ BH1750 bh;
 Adafruit_BME280 bme;
 SCD30 airSensor;
 #define SP30_COMMS I2C_COMMS
+#define AUTOCLEANINTERVAL 604800
 #define TX_PIN 0
 #define RX_PIN 0
 #define DEBUG 0
@@ -37,29 +39,41 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-unsigned long sensingInterval = 60000;
+unsigned long sensingInterval = 120000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-bool waitedForSPS30 = false;
-int readingsToCollate = 1;
+#define READINGS_TO_COLLATE 1
+int sensorPower1 = A0;
+int sensorPower2 = A1;
+int sensorErrorCount = 0;
 
 void initializeSensors();
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
 void qwiicTestForConnectivity();
 void qwiicGetValue();
 JSONBufferWriter readSPS30(JSONBufferWriter writerData);
-void finishWaitForSPS30();
-Timer delayForSPS30 (30000, finishWaitForSPS30, true);
 void goSleep();
 void syncClock();
+void checkErrorReset();
 
 // setup() runs once, when the device is first turned on.
 void setup() {
-	Particle.connect();
 	pinMode(D7,OUTPUT);
+	pinMode(sensorPower1, OUTPUT);
+	pinMode(sensorPower2, OUTPUT);
+	pinSetDriveStrength(sensorPower1, DriveStrength::HIGH);
+	pinSetDriveStrength(sensorPower2, DriveStrength::HIGH);
+	delay(10s);
+	digitalWrite(sensorPower1, HIGH);
+	digitalWrite(sensorPower2, HIGH);
+	Particle.connect();
 	Wire.begin();
 	Serial.begin();
+
+	// Wait for background tasks and senseor initialization to finish
+	sensorErrorCount = 0;
 	initializeSensors();
+	delay(20s);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -68,13 +82,13 @@ void setup() {
 	Particle.process();
 	syncClock();
 
-	// Wait for background tasks to finish, and SCD30 to start up
-	delay(60s);
-
 	// Turn off connectivity
 	Particle.disconnect();
 	waitUntil(Particle.disconnected);
 	WiFi.off();
+	sps30.sleep();
+	digitalWrite(sensorPower1, LOW);
+	digitalWrite(sensorPower2, LOW);
 
 	// Start first sensor reading timer now
 	timeNow = Time.now();
@@ -86,10 +100,9 @@ void loop() {
 	char *dataString = (char *) malloc(1050);
 	JSONBufferWriter writerData(dataString, 1049);
 	writerData.beginArray();
-	writerData.value(System.deviceID());
 
 	// Collate sensor readings sets into 1 string
-	for (int collateCount = 0; collateCount < readingsToCollate; collateCount++){
+	for (int collateCount = 0; collateCount < READINGS_TO_COLLATE; collateCount++){
 
 		// Sleep until next sensor reading timing
 		sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
@@ -98,31 +111,45 @@ void loop() {
 
 		// Start round of reading sensor data
 		digitalWrite(D7,HIGH);
+		digitalWrite(sensorPower1, HIGH);
+		digitalWrite(sensorPower2, HIGH);
 		sps30.wakeup();
-		sps30.start();
-		delayForSPS30.start();
-		bh.make_forced_measurement();
+		bme.begin();
+		bh.begin();
 
 		// Preparation for publishing in last loop, wake up various stuff
-		if (collateCount == (readingsToCollate - 1)) {
+		if (collateCount == (READINGS_TO_COLLATE - 1)) {
 			Serial.begin();
 			WiFi.on();
 			Particle.connect();
 		}
 
+		// Start 30s measurement time before taking readings
+		delay(500);
+		sps30.start();
+		delay(30s);
+
 		// Collate readings into 1 JSON string
-		String readingName = String::format("r%i", collateCount + 1);
 		writerData.beginArray();
 			timeNow = Time.now();
 			writerData.value(Time.format(timeNow, TIME_FORMAT_ISO8601_FULL));
 			writerData = getSensorReadings(writerData);
 		writerData.endArray();
+
+		// End sensor reading
+		sps30.stop();
+		delay(500);
+		sps30.sleep();
+		digitalWrite(sensorPower1, LOW);
+		digitalWrite(sensorPower2, LOW);
 		digitalWrite(D7,LOW);
 	}
 
 	// End of sensor data string
+	digitalWrite(D7,HIGH);
 	writerData.endArray();
 	writerData.buffer()[std::min(writerData.bufferSize(), writerData.dataSize())] = 0;
+	Serial.println("taken sensor reading");
 	
 
 	// Publish collated sensor data string
@@ -131,7 +158,7 @@ void loop() {
 	Serial.println(writerData.dataSize());
 	Serial.println(dataString);
 	Serial.println("");
-	Particle.publish("sensor-readings", dataString);
+	// Particle.publish("sensor-readings", dataString);
 
 	// Sync device clock daily
 	Particle.publishVitals();
@@ -153,15 +180,19 @@ void initializeSensors()
 {
 	// BH1750 Lux Sensor
 	while (!bh.begin()) {
-		delay(500);
+		delay(1s);
 		Serial.println("Trying to connect BH1750 Lux Sensor");
+		sensorErrorCount++;
+		checkErrorReset();
 	}
 	bh.set_sensor_mode(BH1750::forced_mode_low_res);
 
-	// BME280 PTH Sensor, Recommended weather monitoring settings, 1 sample/min
+	// BME280 PTH Sensor, Recommended weather monitoring settings
 	while (!bme.begin()) {
-		delay(500);
+		delay(1s);
 		Serial.println("Trying to connect BME280 PTH Sensor");
+		sensorErrorCount++;
+		checkErrorReset();
 	}
 	bme.setSampling(Adafruit_BME280::MODE_FORCED,
                     Adafruit_BME280::SAMPLING_X1, // temperature
@@ -169,20 +200,25 @@ void initializeSensors()
                     Adafruit_BME280::SAMPLING_X1, // humidity
                     Adafruit_BME280::FILTER_OFF   );
 
-	// SCD30 CO2 Sensor, 1 sample/min
+	// SCD30 CO2 Sensor
 	while (!airSensor.begin()) {
-		delay(500);
+		delay(1s);
 		Serial.println("Trying to connect SCD30 CO2 Sensor");
+		sensorErrorCount++;
+		checkErrorReset();
 	}
-	airSensor.setMeasurementInterval(55);
+	airSensor.setMeasurementInterval(60);
   	airSensor.setAutoSelfCalibration(true);
 
 	// Particulate sensor SPS30
 	sps30.EnableDebugging(DEBUG);
 	while (!sps30.begin(SP30_COMMS)) {
-		delay(500);
+		delay(1s);
 		Serial.println("Trying to connect Particulate SPS30 Sensor");
+		sensorErrorCount++;
+		checkErrorReset();
 	}
+	sps30.SetAutoCleanInt(AUTOCLEANINTERVAL);
 	sps30.reset();
 
 	// Zio Qwiic Loudness Sensor Master
@@ -199,38 +235,39 @@ JSONBufferWriter getSensorReadings(JSONBufferWriter writerData)
 	* Planned Data Structure:
 	* 
 	* [
-	*	"deviceID",
 	* 	["timestamp1", lux, dB, UV, Pressure, Temp, Humidity, CO2, PM1.0, PM2.5, PM4.0, PM10],	//reading set 1
 	* 	["timestamp2", lux, dB, UV, Pressure, Temp, Humidity, CO2, PM1.0, PM2.5, PM4.0, PM10],	//reading set 2
 	* ]
 	*
 	*/
 
-	// LUX Sensor (BH1750)
-	writerData.value(bh.get_light_level());
+	// LUX Sensor (BH1750), rounded to 1 decimal place
+	bh.make_forced_measurement();					// default 4 decimal place
+	float lux = roundf(bh.get_light_level() * 10) / 10;
+	writerData.value(lux);
 
-	// Peak Sound Sensor (SPARKFUN SEN-15892)
+	// Peak Sound Sensor (SPARKFUN SEN-15892), rounded to 1 decimal place
 	qwiicGetValue();
-	writerData.value(dBnumber);
+	float dBrounded = roundf(dBnumber * 10) / 10;
+	writerData.value(dBrounded);
 
 	// UV Sensor (VEML 6070)
-	writerData.value(uv.readUV());
+	writerData.value(uv.readUV());					// default whole numbers
 
-	// Pressure, Temperature, Humidity Sensor (BME280)
-	writerData.value(bme.readPressure()/100.0F);
-	writerData.value(bme.readTemperature());
-	writerData.value(bme.readHumidity());
-
-	// CO2 Sensor (SCD30)
-	waitUntil(airSensor.dataAvailable);
-	if (airSensor.dataAvailable()) {
-		writerData.value(airSensor.getCO2());
-	}
+	// Pressure, Temperature, Humidity Sensor (BME280), rounded to 1 decimal place
+	float pressure = roundf((bme.readPressure()/100.0F) * 10) / 10;
+	float tempC = roundf(bme.readTemperature() * 10) / 10;
+	float humidity = roundf(bme.readHumidity() * 10) / 10;
+	writerData.value(pressure);						// default 2 decimal place
+	writerData.value(tempC);						// default 2 decimal place
+	writerData.value(humidity);						// default 4 decimal place
 
 	// Particulate Sensor (SPS30)
-	while (!waitedForSPS30) delay(1s);
-	writerData = readSPS30(writerData);
+	writerData = readSPS30(writerData);				// default 5 decimal place
 	sps30.sleep();
+
+	// CO2 Sensor (SCD30)
+	writerData.value(airSensor.getCO2());			// default whole numbers
 
 	return writerData;
 }
@@ -276,18 +313,18 @@ JSONBufferWriter readSPS30(JSONBufferWriter writerData) {
 	do {
 		ret = sps30.GetValues(&val);
 	} while (ret != SPS30_ERR_OK);
-	
 
-	writerData.value(val.MassPM1);
-	writerData.value(val.MassPM2);
-	writerData.value(val.MassPM4);
-	writerData.value(val.MassPM10);
+	// pm2 refers to PM2.5 reading
+	float pm1 = roundf(val.MassPM1 * 10) / 10;
+	float pm2 = roundf(val.MassPM2 * 10) / 10;
+	float pm4 = roundf(val.MassPM4 * 10) / 10;
+	float pm10 = roundf(val.MassPM10 * 10) / 10;
+
+	writerData.value(pm1);
+	writerData.value(pm2);
+	writerData.value(pm4);
+	writerData.value(pm10);
 	return writerData;
-}
-
-void finishWaitForSPS30() {
-	waitedForSPS30 = true;
-	return;
 }
 
 void syncClock()
@@ -299,3 +336,10 @@ void syncClock()
 	}
 	return;
 }
+
+void checkErrorReset() {
+	if (sensorErrorCount == 5) {
+		System.reset();
+	}
+	return;
+ }
