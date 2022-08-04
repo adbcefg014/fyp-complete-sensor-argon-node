@@ -39,8 +39,8 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-#define INTERVAL_COMPENSATION 30000
-#define SENSING_INTERVAL (120000 - INTERVAL_COMPENSATION)
+unsigned long intervalCompensation = 30000;
+unsigned long sensingInterval = 120000;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
 #define READINGS_TO_COLLATE 5
@@ -54,18 +54,17 @@ JSONBufferWriter readSPS30(JSONBufferWriter writerData);
 void goSleep();
 void syncClock();
 void checkErrorReset();
+int adjustIntervals (String inString);
 
 // setup() runs once, when the device is first turned on.
 void setup() {
 	pinMode(D7,OUTPUT);
+	Particle.function("adjustIntervals", adjustIntervals);
 	Particle.connect();
 	Wire.begin();
 	Serial.begin();
-
-	// Wait for background tasks and senseor initialization to finish
 	sensorErrorCount = 0;
 	initializeSensors();
-	delay(10s);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -73,6 +72,9 @@ void setup() {
 	Particle.publishVitals();
 	Particle.process();
 	syncClock();
+
+	// Wait for background tasks and sensor initialization to finish
+	delay(30s);
 
 	// Turn off connectivity
 	Particle.disconnect();
@@ -96,7 +98,7 @@ void loop() {
 
 		// Sleep until next sensor reading timing
 		sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
-					.duration(SENSING_INTERVAL + timeNow - Time.now());
+					.duration(sensingInterval - intervalCompensation + timeNow - Time.now());
 		System.sleep(sleepConfig);
 
 		// Start round of reading sensor data
@@ -328,4 +330,21 @@ void checkErrorReset() {
 		System.reset();
 	}
 	return;
+ }
+
+int adjustIntervals (String inString) {
+	// Incoming string should be in the following format:
+	// [newSensingInterval, newIntervalCompensation]
+	// 
+	JSONValue inObj = JSONValue::parseCopy(inString);
+	JSONArrayIterator iter(inObj);
+	int counter = 0;
+
+	while(iter.next()) {
+		if (counter == 0) sensingInterval = (unsigned long)iter.value().toInt();
+		if (counter == 1) intervalCompensation = (unsigned long)iter.value().toInt();
+		counter++;
+	}
+	
+	return 1;
  }
