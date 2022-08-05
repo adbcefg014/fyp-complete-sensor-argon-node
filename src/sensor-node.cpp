@@ -39,12 +39,14 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-unsigned long intervalCompensation = 30000;
-unsigned long sensingInterval = 120000;
+uint64_t intervalCompensation = 30000;
+uint64_t sensingInterval;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-#define READINGS_TO_COLLATE 5
+#define READINGS_TO_COLLATE 1
 int sensorErrorCount = 0;
+int address1 = 10;		// Address of sensingInterval in EEPROM
+int address2 = 20;		// Address of intervalCompensation in EEPROM
 
 void initializeSensors();
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
@@ -65,6 +67,23 @@ void setup() {
 	Serial.begin();
 	sensorErrorCount = 0;
 	initializeSensors();
+
+	// Retrieve saved numbers from EEPROM File System
+	EEPROM.get(address1, sensingInterval);
+	EEPROM.get(address2, intervalCompensation);
+	if(sensingInterval == 0xFFFFFFFFFFFFFFFF) {
+		// EEPROM was empty -> initialize value
+		sensingInterval = 120000;
+		EEPROM.put(address1, sensingInterval);
+	}
+	if(intervalCompensation == 0xFFFFFFFFFFFFFFFF) {			
+		intervalCompensation = 0;
+		EEPROM.put(address2, intervalCompensation);
+	}
+	Serial.print("sensingInterval set to ");
+	Serial.println(sensingInterval);
+	Serial.print("intervalCompensation set to ");
+	Serial.println(intervalCompensation);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -341,12 +360,20 @@ int adjustIntervals (String inString) {
 	int counter = 0;
 
 	while(iter.next()) {
-		if (counter == 0) sensingInterval = (unsigned long)iter.value().toInt();
-		if (counter == 1) intervalCompensation = (unsigned long)iter.value().toInt();
+		if (counter == 0) {
+			sensingInterval = (uint64_t)iter.value().toInt();
+			EEPROM.put(address1, sensingInterval);
+		}
+		if (counter == 1) {
+			intervalCompensation = (uint64_t)iter.value().toInt();
+			EEPROM.put(address2, intervalCompensation);
+		}
 		counter++;
 	}
 	
+	Serial.print("sensingInterval set to ");
 	Serial.println(sensingInterval);
+	Serial.print("intervalCompensation set to ");
 	Serial.println(intervalCompensation);
 	return 1;
  }
