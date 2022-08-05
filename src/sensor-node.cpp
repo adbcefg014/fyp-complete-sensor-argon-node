@@ -39,14 +39,15 @@ const byte qwiicAddress = 0x30;
 #define ONE_DAY_MILLIS (24 * 60 * 60 * 1000)
 uint16_t ADC_VALUE = 0;
 float dBnumber = 0.0;
-uint64_t intervalCompensation = 30000;
-uint64_t sensingInterval;
+uint32_t intervalCompensation;
+uint32_t sensingInterval;
 time_t timeNow;
 SystemSleepConfiguration sleepConfig;
-#define READINGS_TO_COLLATE 1
+uint32_t readingsToCollate;
 int sensorErrorCount = 0;
-int address1 = 10;		// Address of sensingInterval in EEPROM
-int address2 = 20;		// Address of intervalCompensation in EEPROM
+int address0 = 10;		// Address of sensingInterval in EEPROM
+int address1 = 20;		// Address of intervalCompensation in EEPROM
+int address2 = 30;		// Address of readingsToCollate in EEPROM
 
 void initializeSensors();
 JSONBufferWriter getSensorReadings(JSONBufferWriter writerData);
@@ -69,21 +70,28 @@ void setup() {
 	initializeSensors();
 
 	// Retrieve saved numbers from EEPROM File System
-	EEPROM.get(address1, sensingInterval);
-	EEPROM.get(address2, intervalCompensation);
-	if(sensingInterval == 0xFFFFFFFFFFFFFFFF) {
+	EEPROM.get(address0, sensingInterval);
+	EEPROM.get(address1, intervalCompensation);
+	EEPROM.get(address2, readingsToCollate);
+	if (sensingInterval == 0xFFFFFFFF) {
 		// EEPROM was empty -> initialize value
 		sensingInterval = 120000;
-		EEPROM.put(address1, sensingInterval);
+		EEPROM.put(address0, sensingInterval);
 	}
-	if(intervalCompensation == 0xFFFFFFFFFFFFFFFF) {			
+	if (intervalCompensation == 0xFFFFFFFF) {			
 		intervalCompensation = 0;
-		EEPROM.put(address2, intervalCompensation);
+		EEPROM.put(address1, intervalCompensation);
+	}
+	if (readingsToCollate == 0xFFFFFFFF) {			
+		readingsToCollate = 1;
+		EEPROM.put(address2, readingsToCollate);
 	}
 	Serial.print("sensingInterval set to ");
 	Serial.println(sensingInterval);
 	Serial.print("intervalCompensation set to ");
 	Serial.println(intervalCompensation);
+	Serial.print("readingsToCollate set to ");
+	Serial.println(readingsToCollate);
 
 	// Cloud sync initialization
 	waitUntil(Particle.connected);
@@ -113,7 +121,7 @@ void loop() {
 	writerData.beginArray();
 
 	// Collate sensor readings sets into 1 string
-	for (int collateCount = 0; collateCount < READINGS_TO_COLLATE; collateCount++){
+	for (int collateCount = 0; collateCount < (int)readingsToCollate; collateCount++){
 
 		// Sleep until next sensor reading timing
 		sleepConfig.mode(SystemSleepMode::ULTRA_LOW_POWER)
@@ -127,7 +135,7 @@ void loop() {
 		bh.begin();
 
 		// Preparation for publishing in last loop, wake up various stuff
-		if (collateCount == (READINGS_TO_COLLATE - 1)) {
+		if (collateCount == ((int)readingsToCollate - 1)) {
 			Serial.begin();
 			WiFi.on();
 			Particle.connect();
@@ -353,7 +361,7 @@ void checkErrorReset() {
 
 int adjustIntervals (String inString) {
 	// Incoming string should be in the following format:
-	// [newSensingInterval, newIntervalCompensation]
+	// [newSensingInterval, newIntervalCompensation, readingsToCollate]
 	// 
 	JSONValue inObj = JSONValue::parseCopy(inString);
 	JSONArrayIterator iter(inObj);
@@ -361,12 +369,16 @@ int adjustIntervals (String inString) {
 
 	while(iter.next()) {
 		if (counter == 0) {
-			sensingInterval = (uint64_t)iter.value().toInt();
-			EEPROM.put(address1, sensingInterval);
+			sensingInterval = (uint32_t)iter.value().toInt();
+			EEPROM.put(address0, sensingInterval);
 		}
 		if (counter == 1) {
-			intervalCompensation = (uint64_t)iter.value().toInt();
-			EEPROM.put(address2, intervalCompensation);
+			intervalCompensation = (uint32_t)iter.value().toInt();
+			EEPROM.put(address1, intervalCompensation);
+		}
+		if (counter == 2) {
+			readingsToCollate = (uint32_t)iter.value().toInt();
+			EEPROM.put(address2, readingsToCollate);
 		}
 		counter++;
 	}
@@ -375,5 +387,7 @@ int adjustIntervals (String inString) {
 	Serial.println(sensingInterval);
 	Serial.print("intervalCompensation set to ");
 	Serial.println(intervalCompensation);
+	Serial.print("readingsToCollate set to ");
+	Serial.println(readingsToCollate);
 	return 1;
  }
