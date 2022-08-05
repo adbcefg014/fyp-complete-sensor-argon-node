@@ -346,5 +346,7 @@ int adjustIntervals (String inString) {
 		counter++;
 	}
 	
+	Serial.println(sensingInterval);
+	Serial.println(intervalCompensation);
 	return 1;
  }

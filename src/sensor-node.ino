@@ -22,7 +22,6 @@ SCD30 airSensor;
 #define AUTOCLEANINTERVAL 604800
 #define TX_PIN 0
 #define RX_PIN 0
-#define DEBUG 0
 SPS30 sps30;
 Adafruit_VEML6070 uv = Adafruit_VEML6070();
 #define COMMAND_GET_VALUE 0x05
@@ -338,5 +337,7 @@ int adjustIntervals (String inString) {
 		counter++;
 	}
 	
+	Serial.println(sensingInterval);
+	Serial.println(intervalCompensation);
 	return 1;
  }
